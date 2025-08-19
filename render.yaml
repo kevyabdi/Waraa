@@ -1,12 +1,12 @@
-
 services:
   - type: web
     name: telegram-rename-bot
     env: python
     buildCommand: pip install -r requirements.txt
-    startCommand: python3 bot.py
-    plan: free
+    startCommand: bash -lc 'python3 bot.py & gunicorn app:app -b 0.0.0.0:$PORT'
     envVars:
+      - key: PYTHONPATH
+        value: .
       - key: API_ID
         sync: false
       - key: API_HASH
@@ -15,18 +15,22 @@ services:
         sync: false
       - key: ADMIN
         sync: false
-      - key: LOG_CHANNEL
-        sync: false
       - key: DATABASE_URL
         sync: false
       - key: DATABASE_NAME
-        value: JishuBotz
-      - key: START_PIC
-        value: https://graph.org/file/ad48ac09b1e6f30d2dae4.jpg
-      - key: STRING_SESSION
+        sync: false
+      - key: LOG_CHANNEL
         sync: false
       - key: FORCE_SUBS
         sync: false
-      - key: PORT
-        value: 5000
-    healthCheckPath: /health
+      - key: STRING_SESSION
+        sync: false
+      - key: START_PIC
+        sync: false
+      - key: SHORTNER_URL
+        sync: false
+      - key: SHORTNER_API
+        sync: false
+      - key: TOKEN_TIMEOUT
+        sync: false
+    autoDeploy: false
