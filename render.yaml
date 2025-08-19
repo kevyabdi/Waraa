@@ -4,7 +4,7 @@ services:
     name: telegram-rename-bot
     env: python
     buildCommand: pip install -r requirements.txt
-    startCommand: python app.py
+    startCommand: python3 bot.py
     plan: free
     envVars:
       - key: API_ID
