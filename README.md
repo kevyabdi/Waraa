@@ -1,120 +1,144 @@
-<img src="https://graph.org/file/ad48ac09b1e6f30d2dae4.jpg" alt="logo" target="/blank">
+import os
+import time
+import asyncio
+import logging
+from pyrogram import Client, filters
+from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 
-<h1 align="center">
- <b><a href="https://t.me/filerenamexprobot" target="/blank">Rename Bot 4GB</a></>
-</h1>
+from script import Script
+from config import AUTO_DELETE_TIME
+from Helper.database import (
+    get_thumbnail, get_caption, get_metadata,
+    get_auto_delete, increment_rename
+)
+from Helper.utils import progress_bar, humanbytes, rate_limit, maintenance_check
 
-<p align="center">🩷 Thanks for Being Here 🩷</p>
+logger = logging.getLogger("waraa.rename")
 
+# ════════════════════════════════════════════
+#       WARAA BOT — RENAME HANDLER
+# ════════════════════════════════════════════
 
-
-
-
-### 🔥 ALL VARIABLES
-
-<b><details><summary>Tap On Me For Environment Variable</summary>
-
-* `API_ID` - Get API ID From <a href="https://my.telegram.org" target="/blank">Telegram Auth</a> 
-* `API_HASH` - Get API HASH From <a href="https://my.telegram.org" target="/blank">Telegram Auth</a>
-* `BOT_TOKEN` - Get BOT TOKEN From <a href="https://t.me/BotFather" target="/blank">Bot Father</a>
-* `ADMIN` - Add Your User ID, If Multiple Is Use Space To Split
-* `LOG_CHANNEL` - Bot Logs Channel To Sending User Data & 4GB Premium Client To Use, Id Must Startswith -100 & Make Sure Bot Is Admin In This Channel
-* `DATABASE_URL` - Mongo Database URL From <a href="https://cloud.mongodb.com" target="/blank">Mongo DB</a>
-* `DATABASE_NAME`  - Your Mongo Database Name From Mongo DB (Optional)
-* `FORCE_SUBS` - Your Force Subscribe Channel Username Without @ (Optional)
-* `START_PIC` - Your Bot Start Command Pic (Optional)
-* `STRING_SESSION` - Premium 4GB Client Pyrogram v2 String Session, You Can Get It From <a href="https://t.me/StringGenXRobot" target="/blank">String Gen Bot</a> (Optional)
-</b>
-</details>
+# Track pending rename requests: {user_id: message}
+_pending: dict[int, Message] = {}
 
 
+@Client.on_message(
+    filters.private
+    & (filters.document | filters.video | filters.audio)
+)
+@maintenance_check
+@rate_limit
+async def file_received(client: Client, message: Message):
+    """Step 1 — user sends a file; ask for new name."""
+    user_id = message.from_user.id
 
-### 📶 DEPLOYEMENT
+    # Get original filename
+    media = message.document or message.video or message.audio
+    orig  = getattr(media, "file_name", None) or "file"
 
-<b><details><summary>Tap On Me For Deply To Heroku</summary>
+    _pending[user_id] = message
 
- - Deploy To Heroku
-<p>
-<a href="https://heroku.com/deploy?template=https://github.com/JishuDeveloper/Rename-Bot-4GB"> <img src="https://www.herokucdn.com/deploy/button.svg" alt="Deploy"> </a>
-</p>
-</b>
-</details>
+    buttons = InlineKeyboardMarkup([
+        [InlineKeyboardButton("❌ Jooji", callback_data="cancel_rename")]
+    ])
 
-
-
-### 🥰 FEATURES
-
-<b><details><summary>Tap On Me For Bot Features</summary>
-
- - Renames Very Fast.
- - Support 4GB Rename With Upgrade Plan.
- - Permanent Thumbnail Support.
- - Supports Broadcasts.
- - Set Custom Caption.
- - Has A Custom Start-Up Pic.
- - Force Subscribe Available.
- - Supports Unlimited Renaming At A Time.
- - Deploy To Koyeb + Heroku + Railway.
- - Developer Service 24x7. 🔥
-</b>
-</details>
+    await message.reply(
+        Script.RENAME_TXT.format(orig),
+        reply_markup=buttons
+    )
 
 
+@Client.on_message(filters.private & filters.text & ~filters.command(["start","help","ping","stats","myplan"]))
+@maintenance_check
+async def new_name_received(client: Client, message: Message):
+    """Step 2 — user types the new filename."""
+    user_id  = message.from_user.id
+    orig_msg = _pending.pop(user_id, None)
 
-### 😍 USER COMMANDS
+    if not orig_msg:
+        return  # no pending rename for this user
 
-<b><details><summary>Tap On Me For User Commands</summary>
+    new_name = message.text.strip()
+    if not new_name:
+        await message.reply("❌ Magac faaruq ah. Dib u isku day.")
+        return
 
-```
-start - Check If The Bot Is Running.
-viewthumb - To View Current Thumbnail.
-delthumb - To Delete Current Thumbnail.
-set_caption - To Set A Custom Caption.
-see_caption - To See Your Custom Caption.
-del_caption - To Delete Custom Caption.
-ping - To Check Bot Ping.
-myplan - To View User Current Plan.
-donate - To Support Developer.
-upgrade - To View All Plans With Price List.
-```
-</b>
-</details>
+    status = await message.reply(Script.RENAME_WAIT)
+    media  = orig_msg.document or orig_msg.video or orig_msg.audio
+
+    # ── Download ──────────────────────────────
+    try:
+        dl_start = time.time()
+        file_path = await orig_msg.download(
+            progress=progress_bar,
+            progress_args=(status, "⬇️ **Soo dejinaya...**", dl_start)
+        )
+    except Exception as e:
+        logger.exception("Download failed for user %d: %s", user_id, e)
+        await status.edit(Script.RENAME_FAILED)
+        return
+
+    # ── Rename locally ───────────────────────
+    ext      = os.path.splitext(getattr(media, "file_name", "") or "")[1]
+    if "." not in new_name:
+        new_name += ext
+
+    new_path = os.path.join(os.path.dirname(file_path), new_name)
+    os.rename(file_path, new_path)
+
+    # ── Gather extras ────────────────────────
+    thumb    = await get_thumbnail(user_id)
+    caption  = await get_caption(user_id)
+    metadata = await get_metadata(user_id)
+
+    # Format caption placeholders
+    if caption:
+        size_str = humanbytes(media.file_size or 0)
+        caption  = caption.replace("{filename}", new_name)\
+                          .replace("{filesize}", size_str)
+    else:
+        caption = f"📄 `{new_name}`"
+
+    # ── Upload ───────────────────────────────
+    try:
+        ul_start = time.time()
+        sent = await orig_msg.reply_document(
+            document   = new_path,
+            file_name  = new_name,
+            caption    = caption,
+            thumb      = thumb,
+            progress   = progress_bar,
+            progress_args = (status, "⬆️ **Diraya...**", ul_start)
+        )
+    except Exception as e:
+        logger.exception("Upload failed for user %d: %s", user_id, e)
+        await status.edit(Script.RENAME_FAILED)
+        return
+    finally:
+        # Always clean up temp file
+        try:
+            os.remove(new_path)
+        except OSError:
+            pass
+
+    await status.delete()
+    await message.reply(Script.RENAME_DONE.format(new_name))
+
+    # ── Track stats ──────────────────────────
+    await increment_rename(user_id, media.file_size or 0)
+
+    # ── Auto-delete (user-level, then global) ─
+    delay = await get_auto_delete(user_id) or AUTO_DELETE_TIME
+    if delay > 0:
+        note = await sent.reply(Script.AUTO_DELETE_TXT.format(delay))
+        asyncio.create_task(_auto_delete(sent, note, delay))
 
 
-
-### 🔐 ADMIN COMMANDS
-
-<b><details><summary>Tap On Me For Admin Commands</summary>
-
-```
-users - Use This Command To See Total Users [Admins Only].
-allids - Use This Command To See All Users IDs List [Admins Only].
-broadcast - Message Broadcast Command [Admins Only].
-warn - Use This Command To Send A Message To A User [Admins Only].
-ceasepower - To Cease (Downgrade) Renaming Capacity [Admins Only].
-resetpower - To Reset Renaming Capacity (To Default 2GB) [Admins Only].
-addpremium - To Upgrade User Plan [Admins Only].
-restart - Use This Command To Cancel All Process And Restart The Bot [Admins Only].
-```
-</b>
-</details>
-
-
-
-### ❤️ RESPECTING
-- [JishuDeveloper](https://github.com/JishuDeveloper)
-- [Madflix Official](https://github.com/jishusinha) 
-- [lntechnical](https://github.com/lntechnical2)
-
-### 😍 BOTS CHANNEL
-- [Madflix Botz](https://t.me/Madflix_Bots)
-- [Jishu Botz](https://t.me/JishuBotz)
-
-### 💕 CONTACT DEVELOPER
-- [Jishu Developer](https://t.me/JishuDeveloper)
-- [Madflix Official](https://t.me/MadflixOfficials)
-
-### ☕ BUY ME A COFFEE
-- [PayPal](https://paypal.me/jishudeveloper/2.50USD)
-- [PhonePe](https://graph.org/file/6822df5af3a2e80637172.jpg)
-- [UPI](https://graph.org/file/b831109be4acff5c966d2.jpg)
+async def _auto_delete(file_msg: Message, note_msg: Message, delay: int):
+    await asyncio.sleep(delay)
+    for m in (file_msg, note_msg):
+        try:
+            await m.delete()
+        except Exception:
+            pass
