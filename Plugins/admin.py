@@ -1,152 +1,153 @@
-from pyrogram.types import (InlineKeyboardButton, InlineKeyboardMarkup)
-from config import *
+import logging
+import asyncio
 from pyrogram import Client, filters
-from helper.date import add_date
-from helper.database import uploadlimit, usertype, addpre
+from pyrogram.types import Message
+
+from script import Script
+from config import ADMIN
+from Helper.database import (
+    get_user_count, get_all_user_ids, get_all_users,
+    add_premium, remove_premium, ban_user, unban_user
+)
+from Helper.utils import admin_only
+
+logger = logging.getLogger("waraa.admin")
+
+# ════════════════════════════════════════════
+#       WARAA BOT — ADMIN COMMANDS
+# ════════════════════════════════════════════
+
+admin_filter = filters.private & filters.user(ADMIN)
 
 
+@Client.on_message(filters.command("users") & admin_filter)
+@admin_only
+async def cmd_users(client: Client, message: Message):
+    count = await get_user_count()
+    await message.reply(f"👥 **Isticmaalayaasha guud ahaan:** `{count}`")
 
 
+@Client.on_message(filters.command("allids") & admin_filter)
+@admin_only
+async def cmd_allids(client: Client, message: Message):
+    ids   = await get_all_user_ids()
+    text  = "\n".join(str(i) for i in ids)
+    if len(text) > 4000:
+        # Send as file if too long
+        with open("/tmp/user_ids.txt", "w") as f:
+            f.write(text)
+        await message.reply_document("/tmp/user_ids.txt", caption="📋 Dhammaan IDs-yada")
+    else:
+        await message.reply(f"📋 **IDs-yada isticmaalayaasha:**\n\n`{text}`")
 
-@Client.on_message(filters.private & filters.user(ADMIN) & filters.command(["warn"]))
-async def warn(c, m):
-    if len(m.command) >= 3:
+
+@Client.on_message(filters.command("broadcast") & admin_filter)
+@admin_only
+async def cmd_broadcast(client: Client, message: Message):
+    if not message.reply_to_message:
+        await message.reply("↩️ **Fariinta aad baahato u jawaab, ka dibna /broadcast qor.**")
+        return
+
+    status   = await message.reply("📢 **Fariinta la dirayo...**")
+    ids      = await get_all_user_ids()
+    success  = 0
+    failed   = 0
+
+    for uid in ids:
         try:
-            user_id = m.text.split(' ', 2)[1]
-            reason = m.text.split(' ', 2)[2]
-            await m.reply_text("User Notfied Sucessfully 😁")
-            await c.send_message(chat_id=int(user_id), text=reason)
-        except:
-            await m.reply_text("User Not Notfied Sucessfully 😔")
-            
-            
+            await message.reply_to_message.copy(uid)
+            success += 1
+            await asyncio.sleep(0.05)  # avoid flood
+        except Exception:
+            failed += 1
 
-@Client.on_message(filters.private & filters.user(ADMIN) & filters.command(["addpremium"]))
-async def buypremium(bot, message):
-    button = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🪙 Basic", callback_data="vip1"),
-        InlineKeyboardButton("⚡ Standard", callback_data="vip2")],
-        [InlineKeyboardButton("💎 Pro", callback_data="vip3")],
-        [InlineKeyboardButton("✖️ Cancel ✖️",callback_data = "cancel")]
-        ])
-        
-    await message.reply_text("🦋 Select Plan To Upgrade...", quote=True, reply_markup=button)
-    
-    
-
-@Client.on_message((filters.channel | filters.private) & filters.user(ADMIN) & filters.command(["ceasepower"]))
-async def ceasepremium(bot, message):
-    button = InlineKeyboardMarkup([
-        [InlineKeyboardButton("Limit 1GB", callback_data="cp1"),
-        InlineKeyboardButton("All Power Cease", callback_data="cp2")],
-        [InlineKeyboardButton("✖️ Cancel ✖️",callback_data = "cancel")]
-        ])
-	
-    await message.reply_text("😁 Power Cease Mode...", quote=True, reply_markup=button)
+    await status.edit(
+        f"✅ **Broadcast dhammaaday!**\n\n"
+        f"• La diray: `{success}`\n"
+        f"• Ku fashilmay: `{failed}`"
+    )
 
 
-
-@Client.on_message((filters.channel | filters.private) & filters.user(ADMIN) & filters.command(["resetpower"]))
-async def resetpower(bot, message):
-    button = InlineKeyboardMarkup([
-        [InlineKeyboardButton("✅ Yes",callback_data = "dft"),
-        InlineKeyboardButton("❌ No",callback_data = "cancel")]
-        ])
-        
-    await message.reply_text(text=f"Do You Really Want To Reset Daily Limit To Default Data Limit 2GB ?", quote=True, reply_markup=button)
-    
-    
-    
-
-# PREMIUM POWER MODE @JISHUDEVELOPER
-@Client.on_callback_query(filters.regex('vip1'))
-async def vip1(bot,update):
-    id = update.message.reply_to_message.text.split("/addpremium")
-    user_id = id[1].replace(" ", "")
-    inlimit  = 21474836500
-    uploadlimit(int(user_id),21474836500)
-    usertype(int(user_id),"🪙 Basic")
-    addpre(int(user_id))
-    await update.message.edit("Added Successfully To Premium Upload Limit 20 GB")
-    await bot.send_message(user_id, f"Hey {update.from_user.mention} \n\nYou Are Upgraded To <b>🪙 Basic</b>. Check Your Plan Here /myplan")
+@Client.on_message(filters.command("warn") & admin_filter)
+@admin_only
+async def cmd_warn(client: Client, message: Message):
+    parts = message.text.split(None, 2)
+    if len(parts) < 3:
+        await message.reply("**Isticmaal:** `/warn USER_ID fariiintaada`")
+        return
+    try:
+        target_id = int(parts[1])
+        text      = parts[2]
+        await client.send_message(target_id, f"⚠️ **Digniin Admin:**\n\n{text}")
+        await message.reply(f"✅ Digniin loo diray `{target_id}`.")
+    except Exception as e:
+        await message.reply(f"❌ Khalad: `{e}`")
 
 
-
-@Client.on_callback_query(filters.regex('vip2'))
-async def vip2(bot,update):
-    id = update.message.reply_to_message.text.split("/addpremium")
-    user_id = id[1].replace(" ", "")
-    inlimit = 53687091200
-    uploadlimit(int(user_id), 53687091200)
-    usertype(int(user_id),"⚡ Standard")
-    addpre(int(user_id))
-    await update.message.edit("Added Successfully To Premium Upload Limit 50 GB")
-    await bot.send_message(user_id, f"Hey {update.from_user.mention} \n\nYou Are Upgraded To <b>⚡ Standard</b>. Check Your Plan Here /myplan")
-
-
-
-@Client.on_callback_query(filters.regex('vip3'))
-async def vip3(bot,update):
-    id = update.message.reply_to_message.text.split("/addpremium")
-    user_id = id[1].replace(" ", "")
-    inlimit = 107374182400
-    uploadlimit(int(user_id), 107374182400)
-    usertype(int(user_id),"💎 Pro")
-    addpre(int(user_id))
-    await update.message.edit("Added Successfully To Premium Upload Limit 100 GB")
-    await bot.send_message(user_id, f"Hey {update.from_user.mention} \n\nYou Are Upgraded To <b>💎 Pro</b>. Check Your Plan Here /myplan")
+@Client.on_message(filters.command("addpremium") & admin_filter)
+@admin_only
+async def cmd_add_premium(client: Client, message: Message):
+    from datetime import datetime, timedelta
+    parts = message.text.split()
+    if len(parts) < 3:
+        await message.reply("**Isticmaal:** `/addpremium USER_ID DAYS`")
+        return
+    try:
+        uid     = int(parts[1])
+        days    = int(parts[2])
+        expires = datetime.utcnow() + timedelta(days=days)
+        await add_premium(uid, "premium", expires)
+        await message.reply(f"✅ Premium waa la daray `{uid}` ({days} maalmood).")
+        await client.send_message(uid, f"🎉 **Premium-kaaga waa la kucdaray!**\n📅 Waxay dhacaysaa: {expires.strftime('%Y-%m-%d')}")
+    except Exception as e:
+        await message.reply(f"❌ Khalad: `{e}`")
 
 
+@Client.on_message(filters.command("resetpower") & admin_filter)
+@admin_only
+async def cmd_reset_power(client: Client, message: Message):
+    parts = message.text.split()
+    if len(parts) < 2:
+        await message.reply("**Isticmaal:** `/resetpower USER_ID`")
+        return
+    await remove_premium(int(parts[1]))
+    await message.reply(f"♻️ Power dib loo celiyay `{parts[1]}`.")
 
 
-
-# CEASE POWER MODE @JISHUDEVELOPER
-@Client.on_callback_query(filters.regex('cp1'))
-async def cp1(bot,update):
-    id = update.message.reply_to_message.text.split("/ceasepower")
-    user_id = id[1].replace(" ", "")
-    inlimit  = 2147483652
-    uploadlimit(int(user_id), 2147483652)
-    usertype(int(user_id),"⚠️ Account Downgraded")
-    addpre(int(user_id))
-    await update.message.edit("Added Successfully To Upload Limit 2GB")
-    await bot.send_message(user_id, f"Hey {update.from_user.mention} \n\nYou Are Downgraded To Cease <b>Limit 2GB</b>. Check Your Plan Here /myplan \n\n<b>Contact Admin :</b> @MadflixOfficials")
+@Client.on_message(filters.command("ban") & admin_filter)
+@admin_only
+async def cmd_ban(client: Client, message: Message):
+    parts = message.text.split()
+    if len(parts) < 2:
+        await message.reply("**Isticmaal:** `/ban USER_ID`")
+        return
+    await ban_user(int(parts[1]))
+    await message.reply(f"🚫 Isticmaalaha `{parts[1]}` waa la xidday.")
 
 
-
-@Client.on_callback_query(filters.regex('cp2'))
-async def cp2(bot,update):
-    id = update.message.reply_to_message.text.split("/ceasepower")
-    user_id = id[1].replace(" ", "")
-    inlimit  = 0
-    uploadlimit(int(user_id), 0)
-    usertype(int(user_id),"⚠️ Account Downgraded")
-    addpre(int(user_id))
-    await update.message.edit("Added Successfully To Upload Limit 0GB")
-    await bot.send_message(user_id, f"Hey {update.from_user.mention} \n\nYou Are Downgraded To Cease <b>Limit 0GB</b>. Check Your Plan Here /myplan \n\n<b>Contact Admin :</b> @MadflixOfficials")
+@Client.on_message(filters.command("unban") & admin_filter)
+@admin_only
+async def cmd_unban(client: Client, message: Message):
+    parts = message.text.split()
+    if len(parts) < 2:
+        await message.reply("**Isticmaal:** `/unban USER_ID`")
+        return
+    await unban_user(int(parts[1]))
+    await message.reply(f"✅ Isticmaalaha `{parts[1]}` waa la xoroobiyay.")
 
 
+@Client.on_message(filters.command("restart") & admin_filter)
+@admin_only
+async def cmd_restart(client: Client, message: Message):
+    await message.reply("♻️ **Bot-ka dib ayaa loo bilaabayaa...**")
+    import os, sys
+    os.execl(sys.executable, sys.executable, *sys.argv)
 
 
-# RESET POWER MODE @JISHUDEVELOPER
-@Client.on_callback_query(filters.regex('dft'))
-async def dft(bot,update):
-    id = update.message.reply_to_message.text.split("/resetpower")
-    user_id = id[1].replace(" ", "")
-    inlimit = 2147483652
-    uploadlimit(int(user_id), 2147483652)
-    usertype(int(user_id),"🆓 Free")
-    addpre(int(user_id))
-    await update.message.edit("Daily Data Limit Has Been Reset Successfully.\n\nThis Account Has Default 2GB Remaining Capacity")
-    await bot.send_message(user_id, f"Hey {update.from_user.mention} \n\nYour Daily Data Limit Has Been Reset Successfully. Check Your Plan Here /myplan\n\n<b>Contact Admin :</b> @MadflixOfficials")
-
-
-
-
-
-
-# Jishu Developer 
-# Don't Remove Credit 🥺
-# Telegram Channel @Madflix_Bots
-# Back-Up Channel @JishuBotz
-# Developer @JishuDeveloper & @MadflixOfficials
+@Client.on_message(filters.command("maintenance") & admin_filter)
+@admin_only
+async def cmd_maintenance(client: Client, message: Message):
+    import config
+    config.MAINTENANCE_MODE = not config.MAINTENANCE_MODE
+    state = "✅ FURAN" if config.MAINTENANCE_MODE else "❌ XIDHAN"
+    await message.reply(f"🔧 **Nabad-sugidda:** {state}")
