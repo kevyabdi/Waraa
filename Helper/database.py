@@ -1,150 +1,200 @@
-import pymongo
-import os
-from helper.date import add_date
-from config import *
-mongo = pymongo.MongoClient(DATABASE_URL)
-db = mongo[DATABASE_NAME]
-dbcol = db["user"]
+import logging
+from datetime import datetime
+from motor.motor_asyncio import AsyncIOMotorClient
+
+from config import DATABASE_URL, DATABASE_NAME
+
+# ════════════════════════════════════════════
+#       WARAA BOT — DATABASE HELPER
+# ════════════════════════════════════════════
+
+logger = logging.getLogger("waraa.db")
+
+_client = AsyncIOMotorClient(DATABASE_URL)
+db      = _client[DATABASE_NAME]
+
+users_col    = db["users"]
+premium_col  = db["premium"]
+settings_col = db["settings"]
+stats_col    = db["stats"]        # NEW: rename stats per user
 
 
+# ── User Management ──────────────────────────
 
-# Total User
-def total_user():
-    user = dbcol.count_documents({})
-    return user
-
-
-# Insert Bot Data
-def botdata(chat_id):
-    bot_id = int(chat_id)
-    try:
-        bot_data = {"_id": bot_id, "total_rename": 0, "total_size": 0}
-        dbcol.insert_one(bot_data)
-    except:
-        pass
+async def add_user(user_id: int) -> None:
+    """Add a new user if they don't exist yet."""
+    if not await users_col.find_one({"id": user_id}):
+        await users_col.insert_one({
+            "id":           user_id,
+            "joined":       datetime.utcnow(),
+            "total_renamed": 0,
+            "banned":       False,
+        })
+        logger.info("New user added: %d", user_id)
 
 
-# Total Renamed Files
-def total_rename(chat_id, renamed_file):
-    now = int(renamed_file) + 1
-    dbcol.update_one({"_id": chat_id}, {"$set": {"total_rename": str(now)}})
+async def get_all_users():
+    return users_col.find({})
 
 
-# Total Renamed File Size
-def total_size(chat_id, total_size, now_file_size):
-    now = int(total_size) + now_file_size
-    dbcol.update_one({"_id": chat_id}, {"$set": {"total_size": str(now)}})
+async def get_user_count() -> int:
+    return await users_col.count_documents({})
 
 
-# Insert User Data
-def insert(chat_id):
-    user_id = int(chat_id)
-    user_det = {"_id": user_id, "file_id": None, "caption": None, "daily": 0, "date": 0,
-                "uploadlimit": 5368709120, "used_limit": 0, "usertype": "Free", "prexdate": None,
-                "metadata": False, "metadata_code": "By @Madflix_Bots"}
-    try:
-        dbcol.insert_one(user_det)
-    except:
-        return True
-        pass
+async def get_all_user_ids() -> list[int]:
+    cursor = users_col.find({}, {"id": 1})
+    return [doc["id"] async for doc in cursor]
 
 
-# Add Thumbnail Data
-def addthumb(chat_id, file_id):
-    dbcol.update_one({"_id": chat_id}, {"$set": {"file_id": file_id}})
-
-def delthumb(chat_id):
-    dbcol.update_one({"_id": chat_id}, {"$set": {"file_id": None}})
+async def ban_user(user_id: int) -> None:
+    await users_col.update_one({"id": user_id}, {"$set": {"banned": True}}, upsert=True)
 
 
+async def unban_user(user_id: int) -> None:
+    await users_col.update_one({"id": user_id}, {"$set": {"banned": False}})
 
 
-# ============= Metadata Function Code =============== #
-
-def setmeta(chat_id, bool_meta):
-    dbcol.update_one({"_id": chat_id}, {"$set": {"metadata": bool_meta}})
-
-def setmetacode(chat_id, metadata_code):
-    dbcol.update_one({"_id": chat_id}, {"$set": {"metadata_code": metadata_code}})
-
-# ============= Metadata Function Code =============== #
+async def is_banned(user_id: int) -> bool:
+    doc = await users_col.find_one({"id": user_id})
+    return bool(doc and doc.get("banned"))
 
 
+# ── Thumbnail ────────────────────────────────
 
-# Add Caption Data
-def addcaption(chat_id, caption):
-    dbcol.update_one({"_id": chat_id}, {"$set": {"caption": caption}})
-
-def delcaption(chat_id):
-    dbcol.update_one({"_id": chat_id}, {"$set": {"caption": None}})
-
-
-
-def dateupdate(chat_id, date):
-    dbcol.update_one({"_id": chat_id}, {"$set": {"date": date}})
-
-def used_limit(chat_id, used):
-    dbcol.update_one({"_id": chat_id}, {"$set": {"used_limit": used}})
-
-def usertype(chat_id, type):
-    dbcol.update_one({"_id": chat_id}, {"$set": {"usertype": type}})
-
-def uploadlimit(chat_id, limit):
-    dbcol.update_one({"_id": chat_id}, {"$set": {"uploadlimit": limit}})
+async def set_thumbnail(user_id: int, file_id: str) -> None:
+    await settings_col.update_one(
+        {"id": user_id},
+        {"$set": {"thumbnail": file_id}},
+        upsert=True
+    )
 
 
-# Add Premium Data
-def addpre(chat_id):
-    date = add_date()
-    dbcol.update_one({"_id": chat_id}, {"$set": {"prexdate": date[0]}})
-
-def addpredata(chat_id):
-    dbcol.update_one({"_id": chat_id}, {"$set": {"prexdate": None}})
-
-def daily(chat_id, date):
-    dbcol.update_one({"_id": chat_id}, {"$set": {"daily": date}})
-
-def find(chat_id):
-    id = {"_id": chat_id}
-    x = dbcol.find(id)
-    for i in x:
-        file = i["file_id"]
-        try:
-            caption = i["caption"]
-        except:
-            caption = None
-        try:
-            metadata = i["metadata"]
-        except:
-            metadata = False
-        try:
-            metadata_code = i["metadata_code"]
-        except:
-            metadata_code = None
-            
+async def get_thumbnail(user_id: int) -> str | None:
+    doc = await settings_col.find_one({"id": user_id})
+    return doc.get("thumbnail") if doc else None
 
 
-        return [file, caption, metadata, metadata_code]
-
-def getid():
-    values = []
-    for key in dbcol.find():
-        id = key["_id"]
-        values.append((id))
-    return values
-
-def delete(id):
-    dbcol.delete_one(id)
-
-def find_one(id):
-    return dbcol.find_one({"_id": id})
+async def del_thumbnail(user_id: int) -> None:
+    await settings_col.update_one({"id": user_id}, {"$unset": {"thumbnail": ""}})
 
 
+# ── Caption ──────────────────────────────────
 
-    
+async def set_caption(user_id: int, caption: str) -> None:
+    await settings_col.update_one(
+        {"id": user_id},
+        {"$set": {"caption": caption}},
+        upsert=True
+    )
 
-# Jishu Developer 
-# Don't Remove Credit 🥺
-# Telegram Channel @Madflix_Bots
-# Back-Up Channel @JishuBotz
-# Developer @JishuDeveloper & @MadflixOfficials
+
+async def get_caption(user_id: int) -> str | None:
+    doc = await settings_col.find_one({"id": user_id})
+    return doc.get("caption") if doc else None
+
+
+async def del_caption(user_id: int) -> None:
+    await settings_col.update_one({"id": user_id}, {"$unset": {"caption": ""}})
+
+
+# ── Premium ──────────────────────────────────
+
+async def add_premium(user_id: int, plan: str, expires: datetime) -> None:
+    await premium_col.update_one(
+        {"id": user_id},
+        {"$set": {"plan": plan, "expires": expires, "active": True}},
+        upsert=True
+    )
+
+
+async def get_premium(user_id: int) -> dict | None:
+    return await premium_col.find_one({"id": user_id})
+
+
+async def remove_premium(user_id: int) -> None:
+    await premium_col.update_one({"id": user_id}, {"$set": {"active": False}})
+
+
+async def is_premium(user_id: int) -> bool:
+    doc = await premium_col.find_one({"id": user_id, "active": True})
+    if not doc:
+        return False
+    if doc.get("expires") and doc["expires"] < datetime.utcnow():
+        await remove_premium(user_id)
+        return False
+    return True
+
+
+# ── NEW: Rename Stats ────────────────────────
+
+async def increment_rename(user_id: int, file_size: int = 0) -> None:
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+    await stats_col.update_one(
+        {"id": user_id},
+        {
+            "$inc": {
+                "total_renamed": 1,
+                f"daily.{today}": 1,
+                "total_bytes": file_size,
+            },
+            "$max": {"largest_file": file_size},
+        },
+        upsert=True
+    )
+    await users_col.update_one(
+        {"id": user_id},
+        {"$inc": {"total_renamed": 1}}
+    )
+
+
+async def get_user_stats(user_id: int) -> dict:
+    doc = await stats_col.find_one({"id": user_id}) or {}
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+    user  = await users_col.find_one({"id": user_id}) or {}
+    return {
+        "user_id":       user_id,
+        "total_renamed": doc.get("total_renamed", 0),
+        "today_renamed": doc.get("daily", {}).get(today, 0),
+        "largest_file":  _fmt_size(doc.get("largest_file", 0)),
+        "joined_date":   user.get("joined", "—"),
+    }
+
+
+# ── NEW: Metadata ────────────────────────────
+
+async def set_metadata(user_id: int, metadata: str) -> None:
+    await settings_col.update_one(
+        {"id": user_id},
+        {"$set": {"metadata": metadata}},
+        upsert=True
+    )
+
+
+async def get_metadata(user_id: int) -> str | None:
+    doc = await settings_col.find_one({"id": user_id})
+    return doc.get("metadata") if doc else None
+
+
+# ── NEW: Auto-Delete ─────────────────────────
+
+async def set_auto_delete(user_id: int, seconds: int) -> None:
+    await settings_col.update_one(
+        {"id": user_id},
+        {"$set": {"auto_delete": seconds}},
+        upsert=True
+    )
+
+
+async def get_auto_delete(user_id: int) -> int:
+    doc = await settings_col.find_one({"id": user_id})
+    return doc.get("auto_delete", 0) if doc else 0
+
+
+# ── Helpers ──────────────────────────────────
+
+def _fmt_size(size: int) -> str:
+    for unit in ("B", "KB", "MB", "GB"):
+        if size < 1024:
+            return f"{size:.1f} {unit}"
+        size /= 1024
+    return f"{size:.1f} TB"
